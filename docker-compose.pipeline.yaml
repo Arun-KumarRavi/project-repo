@@ -1,0 +1,24 @@
+services:
+  frontend:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    # The 'image' tag is crucial for pipelines to know what to name the built image before pushing.
+    # We use variables so Jenkins can pass them in: DOCKER_REGISTRY and BUILD_TAG.
+    image: ${DOCKER_REGISTRY:-your-docker-username}/accounts-frontend:${BUILD_TAG:-latest}
+    container_name: react-frontend-pipeline
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    # Removed stdin_open and tty as pipelines run non-interactively.
+    
+  backend:
+    build:
+      context: ./flask-integration
+      dockerfile: Dockerfile
+    # Tagging the backend image for pushing to a registry.
+    image: ${DOCKER_REGISTRY:-your-docker-username}/accounts-backend:${BUILD_TAG:-latest}
+    container_name: flask-backend-pipeline
+    ports:
+      - "5000:5000"
