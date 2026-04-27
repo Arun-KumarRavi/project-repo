@@ -45,8 +45,9 @@ pipeline {
             steps {
                 echo 'Running Frontend Tests...'
                 dir('client') {
-                    // CI=true forces react-scripts to run tests once instead of waiting interactively
-                    sh 'CI=true npm test'
+                    // CI=true forces react-scripts to run tests once
+                    // --passWithNoTests prevents the pipeline from failing if you haven't written any tests yet
+                    sh 'CI=true npm test -- --passWithNoTests'
                 }
             }
         }
@@ -70,9 +71,12 @@ pipeline {
         stage('SonarQube Scan') {
             steps {
                 echo 'Running SonarQube Analysis...'
-                // NOTE: Change 'sonar-server' to whatever name you gave your SonarQube server in Jenkins config
-                withSonarQubeEnv('sonar-server') {
-                    sh 'sonar-scanner -Dsonar.projectKey=accounts-dashboard -Dsonar.sources=client/src,flask-integration'
+                script {
+                    // This tells Jenkins to automatically grab the Sonar Scanner tool we configure next!
+                    def scannerHome = tool 'sonar-scanner'
+                    withSonarQubeEnv('sonar-server') {
+                        sh "${scannerHome}/bin/sonar-scanner -Dsonar.projectKey=accounts-dashboard -Dsonar.sources=client/src,flask-integration"
+                    }
                 }
             }
         }
@@ -83,6 +87,82 @@ pipeline {
                 echo 'Waiting for Quality Gate...'
                 timeout(time: 5, unit: 'MINUTES') {
                     waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+        // STAGE 8: Trivy Filesystem Scan
+        stage('Trivy FS Scan') {
+            steps {
+                echo 'Scanning filesystem for vulnerabilities and secrets...'
+                sh 'trivy fs .'
+            }
+        }
+
+        // ----------------------------------------------------
+        // FRONTEND CONTAINER PHASE
+        // ----------------------------------------------------
+
+        // STAGE 9: Build Frontend Image
+        stage('Build Frontend Image') {
+            steps {
+                echo 'Building React Docker Image...'
+                dir('client') {
+                    sh 'docker build -t accounts-frontend:latest .'
+                }
+            }
+        }
+
+        // STAGE 10: Scan Frontend Image
+        stage('Trivy Scan Frontend Image') {
+            steps {
+                echo 'Scanning React Docker Image for CVEs...'
+                sh 'trivy image accounts-frontend:latest'
+            }
+        }
+
+        // STAGE 11: Push Frontend Image
+        stage('Push Frontend Image') {
+            steps {
+                echo 'Pushing Frontend Image to Registry...'
+                // Ensure you created 'docker-hub-credentials' in Jenkins Credentials!
+                withCredentials([usernamePassword(credentialsId: 'docker-hub-credentials', passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
+                    sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
+                    sh 'docker tag accounts-frontend:latest $DOCKER_USER/accounts-frontend:latest'
+                    sh 'docker push $DOCKER_USER/accounts-frontend:latest'
+                }
+            }
+        }
+
+        // ----------------------------------------------------
+        // BACKEND CONTAINER PHASE
+        // ----------------------------------------------------
+
+        // STAGE 12: Build Backend Image
+        stage('Build Backend Image') {
+            steps {
+                echo 'Building Flask Docker Image...'
+                dir('flask-integration') {
+                    sh 'docker build -t accounts-backend:latest .'
+                }
+            }
+        }
+
+        // STAGE 13: Scan Backend Image
+        stage('Trivy Scan Backend Image') {
+            steps {
+                echo 'Scanning Flask Docker Image for CVEs...'
+                sh 'trivy image accounts-backend:latest'
+            }
+        }
+
+        // STAGE 14: Push Backend Image
+        stage('Push Backend Image') {
+            steps {
+                echo 'Pushing Backend Image to Registry...'
+                withCredentials([usernamePassword(credentialsId: 'docker-hub-credentials', passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
+                    sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
+                    sh 'docker tag accounts-backend:latest $DOCKER_USER/accounts-backend:latest'
+                    sh 'docker push $DOCKER_USER/accounts-backend:latest'
                 }
             }
         }
